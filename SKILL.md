@@ -116,6 +116,19 @@ Use this order when diagnosing post-update failures:
 - Task ledger: `openclaw tasks audit`
 - Runtime symptoms: gateway logs
 
+## When to open references
+
+Start with this file first.
+
+Open [references/failure-patterns.md](references/failure-patterns.md) when:
+
+- `doctor` or `plugins doctor` points to a known-looking regression
+- `channels status` or logs disagree with the apparent service health
+- plugin installs, install records, or config state do not match what is on disk
+- the update completed, but the host is still slow, disconnected, noisy, or half-broken
+
+Use the reference file for symptom matching and concrete examples after the main workflow has narrowed the likely failure area.
+
 ## Bundled vs external plugin rule
 
 Do not assume a broken plugin means "plugin missing."
