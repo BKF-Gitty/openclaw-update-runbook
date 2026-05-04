@@ -4,6 +4,8 @@ An operator-focused skill and reference pack for updating OpenClaw, debugging po
 
 This is designed for people using Codex or Claude-style agent workflows to maintain OpenClaw hosts. It turns the update/debug process into a repeatable audit instead of a guessy rescue mission.
 
+Important: GitHub is only the distribution point. To use this as a real skill, install or copy the whole folder locally so `SKILL.md` and `references/failure-patterns.md` stay together. The skill expects those files to exist side by side on disk.
+
 ## What it includes
 
 - `SKILL.md`: the main update runbook skill
@@ -30,6 +32,8 @@ This is designed for people using Codex or Claude-style agent workflows to maint
 
 Clone or download this repository, then place the folder where your Codex skills live, or install it from the repo if your Codex setup supports repo-based skill installs.
 
+Do not copy only `SKILL.md`. The skill refers to local companion files under `references/` and `agents/`.
+
 The main entry point is:
 
 - `SKILL.md`
@@ -41,6 +45,8 @@ Invoke the skill when you are:
 - upgrading OpenClaw
 - checking health right after an upgrade
 - debugging a host that became slow, disconnected, or inconsistent after update
+
+The agent should start with `SKILL.md` and open `references/failure-patterns.md` only when the main workflow points to a known regression pattern or contradictory runtime symptoms.
 
 The runbook is intentionally conservative: verify service reality first, inspect plugin and config drift second, then apply the smallest fix that makes the host consistent again.
 

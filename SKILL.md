@@ -7,6 +7,8 @@ description: Use when updating OpenClaw or debugging an OpenClaw instance after 
 
 Use this skill when an OpenClaw host was just updated, is about to be updated, or is behaving strangely after an update.
 
+This skill is meant to be installed as a folder, not copied as a single file. It expects `references/failure-patterns.md` to exist locally beside `SKILL.md` inside the same skill bundle.
+
 The goal is not only to get it running, but to prove which layer is broken:
 
 - service lifecycle
