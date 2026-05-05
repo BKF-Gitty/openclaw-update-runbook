@@ -302,9 +302,23 @@ Recovery:
 - prefer renaming the broken install dir (e.g., to `<dir>.broken-<date>`) over deleting it, so the failure can still be reproduced for an upstream report
 - file an upstream issue with: declared optional deps in `package.json` vs unconditional imports in `dist`
 
+Why two hosts on the same plugin version can show different results (observed 2026-05-05):
+- the bug only surfaces when Node's ESM resolver cannot find the "optional" peer from the plugin's location
+- on hosts where the peer is **hoisted** at `~/.openclaw/npm/node_modules/<scope>/<peer>` (sibling to the plugin), the import succeeds silently and `plugins doctor` reports clean
+- the peer can also be satisfied by a copy under `/opt/homebrew/lib/node_modules/openclaw/node_modules/<scope>/<peer>` (bundled with the host package), or by leftover `~/.openclaw/plugin-backups/<id>.*/node_modules/<scope>/<peer>` directories from a prior disabled install
+- a host that recently ran a clean reinstall (or `npm prune`, or a `doctor --fix` cleanup that removed disabled plugin backups) is more likely to hit the failure than a host that has accumulated multiple historical copies of the peer
+- if you reproduce the bug, also enumerate every on-disk copy of the peer before rolling back, so you can explain the divergence to upstream:
+  ```
+  find ~/.openclaw /opt/homebrew/lib/node_modules -maxdepth 6 -type d -name "<peer-package-name>"
+  ```
+
+Inspection note:
+- `dist/index.js` is typically a single esbuild-bundled minified line; `grep` will appear to match the entire file. Use `grep -oE "from'@[^']+'" dist/index.js` (or similar token-level patterns) to enumerate actual import specifiers without dumping the bundle.
+
 Why it matters:
 - this is not a missing-dep on the operator's side — it is a packaging defect
 - avoid the temptation to manually `npm install` the missing peer into the plugin dir, because the next `plugins update` will overwrite the directory and the fix will silently disappear
+- the resolver-luck variance is itself the bug: a plugin that "works on my host" but breaks for the next operator is the same defect, not a host configuration difference; do not dismiss the upstream report because your host happens to satisfy the import
 
 ## 17. "Duplicate plugin id detected" warning text wraps in a self-referential way
 
