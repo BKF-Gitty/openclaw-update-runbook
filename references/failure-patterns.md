@@ -368,8 +368,15 @@ Background:
 - Hosts upgraded from 2026.5.3 inherit the legacy behavior implicitly but doctor flags it until the key is set explicitly.
 
 What to do:
-- if `plugins.allow` is restrictive and you intentionally rely on bundled providers, set `plugins.bundledDiscovery: "compat"` to silence the warning without changing behavior
-- if you want strict allowlisting end-to-end, audit which bundled providers your agent fallback chains require, add them to `plugins.allow`, then set `plugins.bundledDiscovery: "allowlist"`
+- if `plugins.allow` is restrictive and you intentionally rely on bundled providers, set `plugins.bundledDiscovery: "compat"` to lock in current behavior — note that this **does not silence the doctor warning**, it only pins the mode against a future default flip (see refinement below)
+- if you want strict allowlisting end-to-end and want the warning gone, audit which bundled providers your agent fallback chains require, add them to `plugins.allow`, then set `plugins.bundledDiscovery: "allowlist"`
+
+Refinement (observed 2026-05-05 on a 2026.5.4 host):
+- Some 2026.5.x point releases auto-migrate `plugins.bundledDiscovery` to `"compat"` during the host upgrade, so the key may already be set even on hosts that never had it explicitly. Always re-read the live config before assuming the warning means the key is unset.
+- Even with `"compat"` explicitly set, doctor continues to print: `plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode ... set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked`. The warning is the doctor's nudge to migrate forward, not a "key missing" warning. Two paths to silence:
+  1. Migrate to `"allowlist"` (recommended): enumerate the bundled providers your agents actually need by walking `c.agents.defaults.model.{primary,fallbacks}` and any agent-level overrides; the model strings are typically `provider/model` shaped (e.g., `anthropic/claude-opus-4-7`, `openai-codex/gpt-5.5`). Map each `provider/` prefix to its bundled plugin id (`openai-codex` → `openai`, since the openai plugin owns both `openai` and `openai-codex` provider ids). Add the corresponding plugin ids to `plugins.allow`, set `plugins.bundledDiscovery: "allowlist"`, restart, and re-run doctor.
+  2. Accept the persistent warning and rely on `"compat"` — fine for now, but re-audit after every minor bump in case a future version changes the warning into an error.
+- When migrating to `"allowlist"`, also confirm the corresponding API-key env vars are present in the LaunchAgent service-env (e.g., `ANTHROPIC_API_KEY` for the `anthropic` plugin); plugins added to `plugins.allow` without credentials will load but fail at first use, which is harder to diagnose than a discovery warning.
 
 Why it matters:
 - this is a config-shape change introduced silently by a minor version bump; treat it as a host-upgrade follow-up, not a one-off doctor warning
@@ -457,3 +464,39 @@ Why it matters:
 - a `plugins install <pkg>@latest --pin --force` no-op (e.g., from a network or registry hiccup, or because npm latest temporarily lagged ClawHub) is invisible until you hit a sub-feature that depends on the new version.
 - without the snapshot/diff, the operator cannot prove the cohort actually moved — only that the host did.
 - the snapshot also documents what to roll back to if the new cohort surfaces a packaging defect (Pattern #16).
+
+## 23. Service-env writer corrupts string secrets with literal double-quote wrapping (2026.5.4)
+
+Symptom:
+- a previously working channel (e.g., Discord) returns auth failure (`401 Unauthorized` from the upstream API) immediately after a host upgrade, even though `channels status` reports `token:env` and the channel was healthy before the upgrade
+- `secrets audit` reports `unresolved=0` and the underlying value in `secrets.json` is unchanged
+- the channel reconnects fine if you manually re-paste the token into the env file
+
+Root cause:
+- the 2026.5.4 service-env writer JSON-encodes string values from `secrets.json` (wrapping them in `"`) and **then** shell-single-quotes the result for the env file
+- the resulting line looks like `export DISCORD_BOT_TOKEN='"MTQ3...3RI"'` — the outer single quotes are correct shell quoting, but the inner literal `"` characters become part of the value when the env file is sourced
+- the upstream API receives a token with stray leading and trailing `"` chars and rejects it
+- the bug only surfaces the next time the env file is regenerated (a host upgrade, certain `doctor --fix` runs, plugin reinstalls), so it presents as "the upgrade broke Discord" rather than a config drift
+
+What to inspect:
+- the raw bytes of the env line, not just the masked output:
+  ```
+  node -e 'const l=require("fs").readFileSync(process.env.HOME+"/.openclaw/service-env/ai.openclaw.gateway.env","utf8").split("\n").find(l=>l.startsWith("export DISCORD_BOT_TOKEN=")); console.log("first5="+JSON.stringify(l.slice(25,30)),"last5="+JSON.stringify(l.slice(-5)))'
+  ```
+- a clean line: `first5="'MTQ3"` and `last5="63RI'"` (single quotes only)
+- a corrupted line: `first5="'\"MTQ"` and `last5="3RI\"'"` (literal `"` baked inside)
+- check every `*_TOKEN` / `*_API_KEY` line in the env file the same way; the same writer emits all of them
+
+Recovery:
+- back up the env file: `cp <env> <env>.bak-token-fix-<date>`
+- rewrite the affected lines using the value from `secrets.json` (which is the canonical clean value), shell-single-quoted with no inner JSON wrapping; only safe if the secret itself contains no single quotes (almost always the case for API tokens)
+- `launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway` to restart
+- re-run `openclaw channels status --deep` and confirm the channel reconnects
+
+Why it matters:
+- this is a packaging defect in the env-file writer, not operator drift; the local fix is fragile because the next regeneration will re-corrupt the file
+- file an upstream issue with the exact line bytes, the source `secrets.json` value type (string), and the affected host version
+- until upstream ships a fix, treat any operation that may rewrite `service-env/*.env` (host updates, plugin updates, `doctor --fix` involving secrets) as a Discord/Telegram outage risk and re-verify channel auth immediately after
+
+Workflow addendum:
+- when post-update channel health shows auth failure, **inspect the env file's raw bytes for quote corruption before assuming the upstream credential was rotated**. The wrong diagnosis path leads to credential rotation and operator confusion; the right diagnosis takes 30 seconds.

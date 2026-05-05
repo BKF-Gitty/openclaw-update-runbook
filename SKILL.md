@@ -82,7 +82,7 @@ The goal is not only to get it running, but to prove which layer is broken:
    Prioritize recent startup lines and warnings involving:
    - plugin load failures
    - config validation
-   - channel auth
+   - channel auth (if a channel returns 401/auth-failure post-update, inspect `~/.openclaw/service-env/*.env` for token-line quote corruption — see Pattern #23 — before assuming the upstream credential was rotated)
    - context-engine fallback
    - active-memory timeouts
    - event loop degradation
