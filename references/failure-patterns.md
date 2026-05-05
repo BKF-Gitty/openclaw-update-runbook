@@ -346,6 +346,13 @@ Why it matters:
 - operators often dismiss this as cosmetic; it is not — the second path keeps generating doctor noise that masks new regressions
 - the warning text formatter wraps poorly; always re-read the full multi-line warning before deciding the conflict is benign
 
+True false-positive variant (observed 2026-05-05 on `@martian-engineering/lossless-claw@0.9.4`):
+- after archiving every redundant on-disk copy and confirming `find ~/.openclaw -maxdepth 6 -name 'openclaw.plugin.json' | xargs grep -l '"<id>"'` returns only the canonical install path, the warning can still persist
+- `openclaw plugins inspect <id>` then shows the warning's path field is **identical** to the loaded plugin's `Source` path — i.e., the warning is comparing the manifest against itself
+- this looks like an OpenClaw bug where the same manifest is being matched twice (once via the `installs.json` install record, once via filesystem scan) and both lookups are tagged `Origin: global`, generating a phantom duplicate
+- distinguishing genuine #17 (two real manifests on disk) from this false-positive: run `plugins inspect <id>` and compare the `Source` line to the path inside the WARN line. Same path = false positive. Different paths = genuine duplicate, keep hunting.
+- when it is the false positive, leave it alone; do not delete the canonical install in an attempt to silence it
+
 ## 18. Bundled provider discovery mode change after host upgrade (2026.5.4+)
 
 Symptom:
