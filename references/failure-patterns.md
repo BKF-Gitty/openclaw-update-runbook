@@ -500,3 +500,87 @@ Why it matters:
 
 Workflow addendum:
 - when post-update channel health shows auth failure, **inspect the env file's raw bytes for quote corruption before assuming the upstream credential was rotated**. The wrong diagnosis path leads to credential rotation and operator confusion; the right diagnosis takes 30 seconds.
+
+## 24. Non-interactive SSH hides the OpenClaw binary on macOS
+
+Symptom:
+- `ssh host 'openclaw --version'` returns `command not found`
+- the same host has a working LaunchAgent and `openclaw status` works in an interactive shell
+- `launchctl print` may also look wrong if the operator guesses an old service label
+
+What to inspect:
+- `echo "$PATH"` inside the non-interactive SSH command
+- common binary locations: `/opt/homebrew/bin/openclaw`, `~/.local/bin/openclaw`
+- the actual LaunchAgent label under `~/Library/LaunchAgents`
+- the gateway command and port inside the plist or `openclaw status --deep`
+
+Observed example:
+- non-interactive SSH inherited only `/usr/bin:/bin:/usr/sbin:/sbin`
+- OpenClaw was installed under `/opt/homebrew/bin`
+- the gateway LaunchAgent label was `ai.openclaw.gateway`, not an older guessed label
+- the live gateway port was `18789`, so probing an old hard-coded health port falsely reported an outage
+
+Why it matters:
+- a stripped SSH `PATH` can look like a missing installation
+- an old label or hard-coded port can make a healthy gateway look stopped
+- always establish the command path, label, and port before running update or repair commands
+
+## 25. Update stop phase may need launchd bootout even after clean gateway SIGTERM
+
+Symptom:
+- `openclaw update --channel <channel>` prints that `launchctl stop` did not fully stop the service
+- updater reports it used a `bootout` fallback and left the service unloaded before continuing
+- gateway logs may show a clean `SIGTERM` shutdown, followed by a short-lived restart that is immediately terminated before the package swap completes
+
+What to inspect:
+- update command stdout/stderr
+- `launchctl print gui/$(id -u)/ai.openclaw.gateway` before and after the update
+- recent gateway logs around the stop/restart window
+- final `openclaw status --deep`, `/health`, and LaunchAgent PID
+
+Why it matters:
+- this is a lifecycle hiccup, not necessarily an update failure
+- do not rerun the update just because `launchctl stop` needed fallback; first verify the final LaunchAgent is loaded/running and the gateway responds on its configured port
+- include the stop/fallback lines in maintainer reports, because they show launchd semantics the updater had to recover from
+
+## 26. Selected update channel has no matching external plugin release
+
+Symptom:
+- host updates successfully to a selected channel such as beta
+- an external plugin cannot be found on npm for `<package>@<channel>`
+- updater falls back to another tag such as `@latest`
+- post-update `plugins doctor` can still be clean, but the host is now running a mixed channel cohort
+
+Observed example:
+- host updated from `2026.5.7` to `2026.5.10-beta.3`
+- one third-party plugin had no `@beta` release and fell back to `@latest`
+- a globally installed official channel plugin did update to the matching beta version
+- plugin peer dependency links were repaired during the update
+
+What to inspect:
+- update output for `Package not found on npm` and `falling back` lines
+- `openclaw plugins list --json` for each enabled plugin's `origin`, `source`, and `version`
+- `~/.openclaw/plugins/installs.json` to see whether the recorded spec now points at the intended version/tag
+
+Why it matters:
+- "host on beta" does not imply every external plugin is on beta
+- a clean `plugins doctor` proves loadability, not cohort consistency
+- maintainer-facing reports should separate OpenClaw-bundled plugin behavior from external plugin publishing gaps
+
+## 27. Transient post-restart scope and pricing warnings can coexist with healthy channels
+
+Symptom:
+- immediately after restart, gateway logs show websocket responses like `missing scope: operator.read`
+- `status --deep` reports `Model pricing` degraded because an external pricing fetch failed
+- channels remain connected and `/health` reports live
+
+What to inspect:
+- whether the scope errors are confined to the seconds after restart
+- whether later `channels status --deep` is connected
+- whether `/health` returns `{"ok":true,"status":"live"}`
+- whether the pricing warning is tied to a third-party pricing fetch rather than local gateway startup
+
+Why it matters:
+- these warnings are useful to report, but they should not be conflated with a failed package update
+- stale Control UI/websocket clients can race the new gateway during restart
+- external pricing fetch failures may degrade status without affecting channel delivery or plugin loading

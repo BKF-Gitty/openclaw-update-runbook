@@ -18,10 +18,16 @@ The goal is not only to get it running, but to prove which layer is broken:
 - channel health
 - task ledger health
 - runtime performance
+- command-path and update-channel assumptions
 
 ## Quick workflow
 
 1. Establish the real starting state.
+   If you are connected over non-interactive SSH on macOS, do not assume the
+   login-shell `PATH` is available. First locate the binary with common install
+   paths such as `/opt/homebrew/bin/openclaw` and `~/.local/bin/openclaw`, then
+   export the correct `PATH` for the audit session.
+
    Check:
    - `openclaw --version`
    - `openclaw status --deep`
@@ -31,6 +37,8 @@ The goal is not only to get it running, but to prove which layer is broken:
 
 2. Verify the gateway is actually managed correctly.
    Look at launchd state, running PID, and `/health`.
+   Derive the LaunchAgent label and gateway port from `openclaw status --deep`
+   and/or the plist instead of guessing them.
    Do not trust only one of:
    - `launchctl`
    - process list
@@ -70,6 +78,9 @@ The goal is not only to get it running, but to prove which layer is broken:
    Look for:
    - recorded install paths that do not exist
    - recorded versions drifting from installed versions
+   - package specs rewritten or preserved during `openclaw update --channel ...`
+   - external plugins that lack a release for the selected channel and were
+     installed from a fallback tag such as `@latest`
    - source-only TypeScript plugin packages with no compiled `dist/`
    - plugin runtime deps removed from third-party plugin directories
 
@@ -82,11 +93,15 @@ The goal is not only to get it running, but to prove which layer is broken:
    Prioritize recent startup lines and warnings involving:
    - plugin load failures
    - config validation
+   - update lifecycle messages such as `launchctl stop` fallback to `bootout`,
+     config overwrites/backups, and service reload timing
    - channel auth (if a channel returns 401/auth-failure post-update, inspect `~/.openclaw/service-env/*.env` for token-line quote corruption — see Pattern #23 — before assuming the upstream credential was rotated)
    - context-engine fallback
    - active-memory timeouts
    - event loop degradation
    - task restart blocking
+   - transient post-restart UI/websocket scope errors that clear after the
+     gateway is ready
 
 7. Audit runtime/task health after the upgrade.
    Check for:
@@ -170,6 +185,9 @@ If the upgrade exposed an OpenClaw bug rather than local drift, collect:
 - relevant config keys
 - plugin source path actually loaded
 - whether the plugin was bundled or globally installed
+- exact update command and selected channel
+- whether external plugins used channel-specific versions or fallbacks
+- service stop/restart messages, especially if `launchctl stop` needed `bootout`
 - `doctor`/`plugins doctor` warning text
 - the specific log lines around startup failure or restart
 
