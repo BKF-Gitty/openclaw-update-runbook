@@ -1,0 +1,6 @@
+/.git/
+/.clawhub/
+/.clawdhub/
+openclaw-maintainer-issue-*.md
+*.bak
+*.tmp

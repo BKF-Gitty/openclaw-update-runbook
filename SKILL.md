@@ -1,6 +1,10 @@
 ---
 name: openclaw-update-runbook
 description: Use when updating OpenClaw or debugging an OpenClaw instance after an update. This skill acts as a structured update runbook with emphasis on gateway startup, service-manager state, plugin registry and install drift, bundled-vs-npm/clawhub plugin confusion, stale config carried across upgrades, channel health, task ledger corruption, and logs that explain why the updated system is slow, disconnected, or half-broken.
+version: 1.0.0
+metadata:
+  openclaw:
+    emoji: "🦞"
 ---
 
 # OpenClaw Update Runbook
