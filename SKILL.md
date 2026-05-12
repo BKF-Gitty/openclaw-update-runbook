@@ -65,6 +65,9 @@ The goal is not only to get it running, but to prove which layer is broken:
    Important rule:
    - If a capability is supposed to be bundled, verify whether a stale global npm install is shadowing it.
    - If a capability is not bundled, check npm and ClawHub before assuming config is wrong.
+   - For special runtime plugins such as `codex`, compare `plugins inspect <id>`
+     with `plugins list --json`; inspect can report a runtime as loaded while
+     raw plugin metadata still says disabled.
 
 4. Check for config carried across the upgrade that no longer validates.
    Pay attention to:
@@ -132,6 +135,8 @@ The goal is not only to get it running, but to prove which layer is broken:
    - schema validation errors
 
    Treat `status: ok` as insufficient if the primary model failed and a fallback provider completed the run.
+   Treat a clean `plugins doctor` as insufficient for runtime plugins until a
+   fresh direct agent run proves that the intended harness can load and execute.
 
 9. Test at least one representative cron path.
    Check:

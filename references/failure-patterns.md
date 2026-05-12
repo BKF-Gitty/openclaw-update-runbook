@@ -636,6 +636,7 @@ What to inspect:
 - `<global-openclaw>/dist/plugin-sdk/root-alias.cjs`
 - `<global-openclaw>/dist/plugin-sdk/codex-native-task-runtime.js`
 - whether `plugins.entries.codex` exists or whether `codex` is activated as a special runtime plugin outside normal plugin entries
+- both `openclaw plugins inspect codex` and `openclaw plugins list --json`; these can disagree, with `inspect` reporting `Status: loaded` while the JSON list shows `"enabled": false` / `"status": "disabled"` for the same package
 
 Useful snapshot:
 ```
@@ -647,6 +648,14 @@ Why it matters:
 - this is likely an OpenClaw package/import-path bug, not local credential drift
 - reverting only the model id may hide the package bug by moving traffic back to an older provider path
 - handoff notes should include the exact package version and sanitized file layout
+- `plugins doctor` may still say "No plugin issues detected"; do not treat plugin doctor alone as proof the `codex` agent runtime can execute
+
+Observed in 2026.5.12-beta.2:
+- update auto-installed missing configured plugin `codex` from `@openclaw/codex@beta`
+- `plugins inspect codex` reported package version `2026.5.12-beta.2` and `Status: loaded`
+- raw plugin JSON showed the same plugin as disabled
+- direct smoke with `openclaw agent --model openai/gpt-5.5 --json` failed immediately with the `root-alias.cjs/codex-native-task-runtime` module path error
+- the expected file existed as `<global-openclaw>/dist/plugin-sdk/codex-native-task-runtime.js`, adjacent to `<global-openclaw>/dist/plugin-sdk/root-alias.cjs`
 
 ## 30. OpenAI-compatible tool schema rejects arrays missing `items`
 
