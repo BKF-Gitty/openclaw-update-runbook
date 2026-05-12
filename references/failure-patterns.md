@@ -21,7 +21,7 @@ What to inspect:
 
 Why it matters:
 - operators get misleading update advice
-- maintainers should know when install/update channel state is not persisted
+- handoff notes should call out when install/update channel state is not persisted
 
 ## 2. Stale config after upgrade
 
@@ -46,8 +46,8 @@ Symptom:
 - plugin version does not match host version
 
 Example:
-- host on `2026.5.3`
-- global `@openclaw/discord` still at `2026.5.2`
+- host on `<current-version>`
+- global `@openclaw/discord` still at `<previous-version>`
 - gateway warns about missing compiled runtime output because the global plugin is source-only
 
 What to inspect:
@@ -137,12 +137,12 @@ Symptom:
 Treat this as a reporting mismatch first, not a real outage.
 
 Additional example:
-- Discord can be healthy in the gateway service with `token:env`, while `doctor` still warns that `DISCORD_BOT_TOKEN` is absent in the doctor environment.
-- Verify the LaunchAgent env file and `channels status`; do not treat the doctor shell-env warning alone as proof the live gateway is down.
+- A channel can be healthy in the gateway service with `token:env`, while `doctor` still warns that the corresponding token env var is absent in the doctor environment.
+- Verify the service env file and `channels status`; do not treat the doctor shell-env warning alone as proof the live gateway is down.
 
-## 10. What to hand maintainers
+## 10. What to hand the next operator or support contact
 
-When the issue looks like an update regression, capture:
+When a problem looks like an update regression, capture:
 
 - host version before and after
 - whether the capability was bundled, npm-installed, or ClawHub-installed
@@ -159,9 +159,9 @@ Symptom:
 - plugin directories under `~/.openclaw/npm/node_modules/@openclaw/` may disappear or config suddenly becomes invalid until the exact desired versions are reinstalled
 
 Typical example:
-- host core on `2026.5.3`
-- install records still pinned to `2026.5.2-beta.1`
-- running `openclaw plugins update --all` attempts the old beta plugin specs and leaves `brave`, `discord`, and `whatsapp` missing on disk until exact `2026.5.3` packages are reinstalled
+- host core is updated
+- install records still point at older plugin specs
+- running `openclaw plugins update --all` attempts the old plugin specs and leaves channel plugins missing on disk until the intended package versions are reinstalled
 
 What to inspect:
 - `~/.openclaw/plugins/installs.json`
@@ -172,9 +172,9 @@ Why it matters:
 - the built-in updater can deepen an upgrade regression if install metadata drift is not corrected first
 - prefer reconciling install records or reinstalling exact target versions before trusting `openclaw plugins update --all`
 
-Refinement (observed 2026-05-05 on host upgrading 2026.5.3 → 2026.5.4):
+Refinement:
 - `openclaw plugins registry --refresh` does NOT rewrite the install record's `spec` field. It refreshes `hostContractVersion` and compatibility data only.
-- After a refresh, install records can still carry pinned specs like `@martian-engineering/lossless-claw@0.9.2` even when the disk version is `0.9.3`. `plugins update --all` will then **downgrade** the on-disk plugin to match the pinned spec.
+- After a refresh, install records can still carry pinned specs like `<plugin>@<older-version>` even when the disk version is `<newer-version>`. `plugins update --all` will then **downgrade** the on-disk plugin to match the pinned spec.
 - Correct sequence to actually move a third-party plugin forward:
   1. `openclaw plugins update <id> @<scope>/<pkg>@latest` (note: `update` accepts an explicit spec; this rewrites the install record's spec).
   2. Or `openclaw plugins install <pkg>@latest --force` to drop the pin.
@@ -203,16 +203,16 @@ Symptom:
 - `openclaw config validate` passes
 - `openclaw secrets audit` reports `unresolved=0`
 - `openclaw channels status` says a channel is configured but stopped/disconnected with `secret unavailable in this command path`
-- logs say a channel token is unavailable, for example Discord delivery says the bot token configured for account `default` is unavailable
+- logs say a channel token is unavailable, for example a channel delivery path says the bot token configured for account `default` is unavailable
 
 What to inspect:
 - the channel token config path, for example `channels.discord.token`
 - the referenced secrets provider and backing file
-- whether the gateway service env has a working fallback such as `DISCORD_BOT_TOKEN`
+- whether the gateway service env has a working token fallback
 - whether the channel plugin prefers the broken config SecretRef over the env fallback
 
 Observed workaround:
-- add the token to the LaunchAgent service env from the existing local secret source
+- add the token to the service env from the existing local secret source
 - remove the broken channel token config field so the channel falls through to the env-token path
 - restart gateway and verify `channels status` reports `token:env` and connected
 
@@ -220,29 +220,29 @@ Why it matters:
 - schema validation and secrets audit can both pass while the channel runtime still cannot consume the SecretRef
 - this can leave a channel integration down after an update even though the secret exists
 
-Confirmed regression scope (as of 2026-05-05):
-- Reproduced cleanly on `@openclaw/discord` versions 2026.5.2, 2026.5.3, and 2026.5.4 with a `file:filemain:/discord_token` SecretRef pointing at a valid `secrets.json` entry.
-- `openclaw secrets audit` reports `unresolved=0`, `openclaw secrets reload` says "Secrets reloaded.", but the plugin's `normalizeDiscordToken` (`@openclaw/discord/src/token.ts`) still throws `unresolved SecretRef ... Resolve this command against an active gateway runtime snapshot before reading it.` at startup.
+Confirmed regression scope:
+- Reproduced cleanly across multiple adjacent channel-plugin versions with a SecretRef pointing at a valid `secrets.json` entry.
+- `openclaw secrets audit` reports `unresolved=0`, `openclaw secrets reload` says "Secrets reloaded.", but the channel plugin still throws `unresolved SecretRef ... Resolve this command against an active gateway runtime snapshot before reading it.` at startup.
 - Sibling plugins using the same SecretRef shape (e.g. brave's `/brave_api_key`) resolve fine — the bug is plugin-side, not in the secrets layer.
-- Pragmatic workaround (when env fallback isn't available): inline the literal token into `channels.discord.token`. This adds one entry to `secrets audit --plaintext` findings but restores Discord. Plan to revert once upstream `@openclaw/discord` ships a fix that resolves SecretRefs against the runtime snapshot.
+- Pragmatic workaround (when env fallback isn't available): inline the literal token into the affected channel token field. This adds one entry to `secrets audit --plaintext` findings but restores the channel. Plan to revert once upstream `@openclaw/discord` ships a fix that resolves SecretRefs against the runtime snapshot.
 
 Addendum — `token:config` in `channels status` is ambiguous:
 - the same status row appears whether the token came from a successfully resolved SecretRef OR from an inline literal (workaround applied); it is not a signal that the upstream bug is fixed.
 - To disambiguate, inspect the actual config field directly:
-  - `node -e 'const c=JSON.parse(require("fs").readFileSync("/Users/<user>/.openclaw/openclaw.json","utf8")); console.log(typeof c.channels?.discord?.token, c.channels?.discord?.token)'`
+  - `node -e 'const c=JSON.parse(require("fs").readFileSync(process.env.HOME+"/.openclaw/openclaw.json","utf8")); console.log(typeof c.channels?.discord?.token, c.channels?.discord?.token)'`
   - `string` value → inline literal (workaround in place)
   - `object` value → SecretRef (relies on plugin runtime resolution)
 - An operator running this runbook on an inherited host should not assume `token:config` means the regression is gone; verify the field shape before claiming the workaround is no longer needed.
 
-## 14. Gateway CLI start reports argument error but LaunchAgent recovers
+## 14. Gateway CLI start reports argument error but managed service recovers
 
 Symptom:
-- after update, `openclaw gateway start` prints `error: too many arguments for 'gateway'. Expected 0 arguments but got 1.`
-- the command may still re-bootstrap the LaunchAgent afterward
-- `launchctl` and `lsof` show the gateway running despite the CLI error
+- after update, `openclaw gateway start` prints an argument-count error
+- the command may still re-bootstrap the managed service afterward
+- the service manager and open port check show the gateway running despite the CLI error
 
 What to inspect:
-- `launchctl print gui/$(id -u)/ai.openclaw.gateway`
+- the host service-manager status command
 - listener on the configured gateway port
 - `openclaw status`
 - gateway stdout/stderr logs
@@ -258,7 +258,7 @@ Symptom:
 - but the plugin then shows as `disabled` once you try to re-enable a sibling install (e.g., a copy under `~/.openclaw/extensions/`)
 - exclusive slots (e.g., `plugins.slots.contextEngine`) silently revert to `legacy`
 
-What `uninstall` actually removes (observed 2026.5.4):
+What `uninstall` can remove:
 - the install record in `~/.openclaw/plugins/installs.json`
 - the on-disk install directory
 - `plugins.entries.<id>` from `openclaw.json`
@@ -279,18 +279,18 @@ Why it matters:
 ## 16. Third-party plugin declares optional peer dependency but compiled bundle imports it unconditionally
 
 Symptom:
-- after upgrading a third-party plugin, `plugins doctor` reports `lossless-claw [load]: Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@mariozechner/pi-coding-agent'` (or similar)
+- after upgrading a third-party plugin, `plugins doctor` reports a load failure like `Error [ERR_MODULE_NOT_FOUND]: Cannot find package '<peer-package>'`
 - the plugin's `package.json` lists the missing package under `peerDependenciesMeta` with `optional: true`, suggesting it should be skippable
 
 Root cause:
 - the published `dist/index.js` was emitted with an unconditional `import` of an "optional" peer dependency
 - Node's ESM resolver cannot satisfy the import, so the plugin fails to load even though `package.json` says the dep is optional
 
-Typical example (observed 2026-05-05):
-- `@martian-engineering/lossless-claw@0.9.4` declared `@mariozechner/pi-coding-agent` as `peerDependenciesMeta.<dep>.optional: true`
+Typical example:
+- `<plugin>@<version>` declared `<peer-package>` as `peerDependenciesMeta.<dep>.optional: true`
 - the plugin still failed to load because `dist/index.js` imported it unconditionally
-- the previous version (`0.9.3`) shipped a bundled `node_modules/` next to the plugin and worked fine
-- `plugins update --all` on a host with a stale install record (pattern #11) would have downgraded to `0.9.2` instead, masking this as a different failure mode
+- the previous version shipped a bundled `node_modules/` next to the plugin and worked fine
+- `plugins update --all` on a host with a stale install record (pattern #11) may downgrade instead, masking this as a different failure mode
 
 What to inspect:
 - `package.json` `peerDependencies`, `peerDependenciesMeta`, `dependencies`, `devDependencies`
@@ -300,16 +300,16 @@ What to inspect:
 Recovery:
 - roll back to the last known-good plugin version, ideally one that bundled its deps
 - prefer renaming the broken install dir (e.g., to `<dir>.broken-<date>`) over deleting it, so the failure can still be reproduced for an upstream report
-- file an upstream issue with: declared optional deps in `package.json` vs unconditional imports in `dist`
+- share upstream or with support: declared optional deps in `package.json` vs unconditional imports in `dist`
 
-Why two hosts on the same plugin version can show different results (observed 2026-05-05):
+Why two hosts on the same plugin version can show different results:
 - the bug only surfaces when Node's ESM resolver cannot find the "optional" peer from the plugin's location
 - on hosts where the peer is **hoisted** at `~/.openclaw/npm/node_modules/<scope>/<peer>` (sibling to the plugin), the import succeeds silently and `plugins doctor` reports clean
-- the peer can also be satisfied by a copy under `/opt/homebrew/lib/node_modules/openclaw/node_modules/<scope>/<peer>` (bundled with the host package), or by leftover `~/.openclaw/plugin-backups/<id>.*/node_modules/<scope>/<peer>` directories from a prior disabled install
+- the peer can also be satisfied by a copy under `<global-openclaw>/node_modules/<scope>/<peer>` (bundled with the host package), or by leftover `~/.openclaw/plugin-backups/<id>.*/node_modules/<scope>/<peer>` directories from a prior disabled install
 - a host that recently ran a clean reinstall (or `npm prune`, or a `doctor --fix` cleanup that removed disabled plugin backups) is more likely to hit the failure than a host that has accumulated multiple historical copies of the peer
 - if you reproduce the bug, also enumerate every on-disk copy of the peer before rolling back, so you can explain the divergence to upstream:
   ```
-  find ~/.openclaw /opt/homebrew/lib/node_modules -maxdepth 6 -type d -name "<peer-package-name>"
+  find ~/.openclaw <global-node-modules> -maxdepth 6 -type d -name "<peer-package-name>"
   ```
 
 Inspection note:
@@ -346,14 +346,14 @@ Why it matters:
 - operators often dismiss this as cosmetic; it is not — the second path keeps generating doctor noise that masks new regressions
 - the warning text formatter wraps poorly; always re-read the full multi-line warning before deciding the conflict is benign
 
-True false-positive variant (observed 2026-05-05 on `@martian-engineering/lossless-claw@0.9.4`):
+True false-positive variant:
 - after archiving every redundant on-disk copy and confirming `find ~/.openclaw -maxdepth 6 -name 'openclaw.plugin.json' | xargs grep -l '"<id>"'` returns only the canonical install path, the warning can still persist
 - `openclaw plugins inspect <id>` then shows the warning's path field is **identical** to the loaded plugin's `Source` path — i.e., the warning is comparing the manifest against itself
 - this looks like an OpenClaw bug where the same manifest is being matched twice (once via the `installs.json` install record, once via filesystem scan) and both lookups are tagged `Origin: global`, generating a phantom duplicate
 - distinguishing genuine #17 (two real manifests on disk) from this false-positive: run `plugins inspect <id>` and compare the `Source` line to the path inside the WARN line. Same path = false positive. Different paths = genuine duplicate, keep hunting.
 - when it is the false positive, leave it alone; do not delete the canonical install in an attempt to silence it
 
-## 18. Bundled provider discovery mode change after host upgrade (2026.5.4+)
+## 18. Bundled provider discovery mode change after host upgrade
 
 Symptom:
 - after upgrading the host package, `openclaw doctor` adds a new warning:
@@ -362,21 +362,21 @@ Symptom:
 
 Background:
 - `plugins.allow` historically gated only third-party plugins; bundled provider plugins (anthropic, openai, gemini, etc.) were always discoverable.
-- 2026.5.4 introduced `plugins.bundledDiscovery` with two modes:
+- a host release introduced `plugins.bundledDiscovery` with two modes:
   - `"compat"` — preserves legacy behavior; bundled providers stay discoverable regardless of `plugins.allow`
   - `"allowlist"` — bundled providers must also appear in `plugins.allow`
-- Hosts upgraded from 2026.5.3 inherit the legacy behavior implicitly but doctor flags it until the key is set explicitly.
+- Hosts upgraded from an older config shape can inherit the legacy behavior implicitly, and doctor may flag it until the key is set explicitly.
 
 What to do:
 - if `plugins.allow` is restrictive and you intentionally rely on bundled providers, set `plugins.bundledDiscovery: "compat"` to lock in current behavior — note that this **does not silence the doctor warning**, it only pins the mode against a future default flip (see refinement below)
 - if you want strict allowlisting end-to-end and want the warning gone, audit which bundled providers your agent fallback chains require, add them to `plugins.allow`, then set `plugins.bundledDiscovery: "allowlist"`
 
-Refinement (observed 2026-05-05 on a 2026.5.4 host):
-- Some 2026.5.x point releases auto-migrate `plugins.bundledDiscovery` to `"compat"` during the host upgrade, so the key may already be set even on hosts that never had it explicitly. Always re-read the live config before assuming the warning means the key is unset.
+Refinement:
+- Some releases auto-migrate `plugins.bundledDiscovery` to `"compat"` during the host upgrade, so the key may already be set even on hosts that never had it explicitly. Always re-read the live config before assuming the warning means the key is unset.
 - Even with `"compat"` explicitly set, doctor continues to print: `plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode ... set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked`. The warning is the doctor's nudge to migrate forward, not a "key missing" warning. Two paths to silence:
   1. Migrate to `"allowlist"` (recommended): enumerate the bundled providers your agents actually need by walking `c.agents.defaults.model.{primary,fallbacks}` and any agent-level overrides; the model strings are typically `provider/model` shaped (e.g., `anthropic/claude-opus-4-7`, `openai-codex/gpt-5.5`). Map each `provider/` prefix to its bundled plugin id (`openai-codex` → `openai`, since the openai plugin owns both `openai` and `openai-codex` provider ids). Add the corresponding plugin ids to `plugins.allow`, set `plugins.bundledDiscovery: "allowlist"`, restart, and re-run doctor.
   2. Accept the persistent warning and rely on `"compat"` — fine for now, but re-audit after every minor bump in case a future version changes the warning into an error.
-- When migrating to `"allowlist"`, also confirm the corresponding API-key env vars are present in the LaunchAgent service-env (e.g., `ANTHROPIC_API_KEY` for the `anthropic` plugin); plugins added to `plugins.allow` without credentials will load but fail at first use, which is harder to diagnose than a discovery warning.
+- When migrating to `"allowlist"`, also confirm the corresponding API-key env vars are present in the service env (e.g., `ANTHROPIC_API_KEY` for the `anthropic` plugin); plugins added to `plugins.allow` without credentials will load but fail at first use, which is harder to diagnose than a discovery warning.
 
 Why it matters:
 - this is a config-shape change introduced silently by a minor version bump; treat it as a host-upgrade follow-up, not a one-off doctor warning
@@ -390,7 +390,7 @@ Symptom:
 
 What to do:
 - always pass `--force` for non-interactive uninstalls
-- `--yes` and `-y` are NOT accepted as of 2026.5.4; only `--force` skips the prompt
+- `--yes` and `-y` may not be accepted; use `--force` when the command help confirms it skips the prompt
 - if you also want a preview, run `--dry-run` first
 
 Why it matters:
@@ -403,7 +403,7 @@ Symptom:
 - the SSH session appears hung or returns no output to the operator's terminal
 - reconnecting with a fresh ssh shows the box has actually completed most or all of the work — versions bumped, gateway running, plugins on disk
 
-What's happening (observed 2026-05-05):
+What's happening:
 - when one of the inner steps restarts launchd or replaces the wrapper script the gateway plist sources, the parent shell association can break and the local ssh client stops receiving stdout, even though the remote `zsh -c '...'` keeps running detached and finishes the script.
 - the remote orphan can persist as a `zsh -c` process for minutes after the parent ssh exits.
 
@@ -441,7 +441,7 @@ What to do:
 - always re-snapshot the live state at session start, even within hours of the previous session:
   - `openclaw --version`
   - per-plugin disk versions: `for d in ~/.openclaw/npm/node_modules/@*/*/; do node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).name+" "+JSON.parse(require("fs").readFileSync(process.argv[1])).version+"\n")' "$d/package.json"; done`
-  - any service-env or config edits applied by previous workarounds (`grep -l DISCORD_BOT_TOKEN ~/.openclaw/service-env/*.env`)
+  - any service-env or config edits applied by previous workarounds
 - do not rely on prior-session memory for current state; treat every session as a fresh audit
 
 Why it matters:
@@ -465,83 +465,83 @@ Why it matters:
 - without the snapshot/diff, the operator cannot prove the cohort actually moved — only that the host did.
 - the snapshot also documents what to roll back to if the new cohort surfaces a packaging defect (Pattern #16).
 
-## 23. Service-env writer corrupts string secrets with literal double-quote wrapping (2026.5.4)
+## 23. Service-env writer corrupts string secrets with literal double-quote wrapping
 
 Symptom:
-- a previously working channel (e.g., Discord) returns auth failure (`401 Unauthorized` from the upstream API) immediately after a host upgrade, even though `channels status` reports `token:env` and the channel was healthy before the upgrade
+- a previously working channel returns auth failure from the upstream API immediately after a host upgrade, even though `channels status` reports `token:env` and the channel was healthy before the upgrade
 - `secrets audit` reports `unresolved=0` and the underlying value in `secrets.json` is unchanged
 - the channel reconnects fine if you manually re-paste the token into the env file
 
 Root cause:
-- the 2026.5.4 service-env writer JSON-encodes string values from `secrets.json` (wrapping them in `"`) and **then** shell-single-quotes the result for the env file
-- the resulting line looks like `export DISCORD_BOT_TOKEN='"MTQ3...3RI"'` — the outer single quotes are correct shell quoting, but the inner literal `"` characters become part of the value when the env file is sourced
+- the service-env writer JSON-encodes string values from `secrets.json` (wrapping them in `"`) and **then** shell-single-quotes the result for the env file
+- the resulting line looks like `export CHANNEL_TOKEN='"<token>"'` — the outer single quotes are correct shell quoting, but the inner literal `"` characters become part of the value when the env file is sourced
 - the upstream API receives a token with stray leading and trailing `"` chars and rejects it
-- the bug only surfaces the next time the env file is regenerated (a host upgrade, certain `doctor --fix` runs, plugin reinstalls), so it presents as "the upgrade broke Discord" rather than a config drift
+- the bug only surfaces the next time the env file is regenerated (a host upgrade, certain `doctor --fix` runs, plugin reinstalls), so it presents as "the upgrade broke the channel" rather than a config drift
 
 What to inspect:
 - the raw bytes of the env line, not just the masked output:
   ```
-  node -e 'const l=require("fs").readFileSync(process.env.HOME+"/.openclaw/service-env/ai.openclaw.gateway.env","utf8").split("\n").find(l=>l.startsWith("export DISCORD_BOT_TOKEN=")); console.log("first5="+JSON.stringify(l.slice(25,30)),"last5="+JSON.stringify(l.slice(-5)))'
+  node -e 'const fs=require("fs"); const p=process.env.HOME+"/.openclaw/service-env/<service-env-file>"; const l=fs.readFileSync(p,"utf8").split("\n").find(l=>l.startsWith("export <TOKEN_ENV_NAME>=")); console.log(JSON.stringify(l))'
   ```
-- a clean line: `first5="'MTQ3"` and `last5="63RI'"` (single quotes only)
-- a corrupted line: `first5="'\"MTQ"` and `last5="3RI\"'"` (literal `"` baked inside)
+- a clean line has a single shell-quoted token value with no inner literal double quotes
+- a corrupted line has literal `"` characters just inside the shell quotes
 - check every `*_TOKEN` / `*_API_KEY` line in the env file the same way; the same writer emits all of them
 
 Recovery:
 - back up the env file: `cp <env> <env>.bak-token-fix-<date>`
 - rewrite the affected lines using the value from `secrets.json` (which is the canonical clean value), shell-single-quoted with no inner JSON wrapping; only safe if the secret itself contains no single quotes (almost always the case for API tokens)
-- `launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway` to restart
+- restart the gateway through the host service manager
 - re-run `openclaw channels status --deep` and confirm the channel reconnects
 
 Why it matters:
 - this is a packaging defect in the env-file writer, not operator drift; the local fix is fragile because the next regeneration will re-corrupt the file
-- file an upstream issue with the exact line bytes, the source `secrets.json` value type (string), and the affected host version
-- until upstream ships a fix, treat any operation that may rewrite `service-env/*.env` (host updates, plugin updates, `doctor --fix` involving secrets) as a Discord/Telegram outage risk and re-verify channel auth immediately after
+- share upstream or with support: exact line bytes, the source `secrets.json` value type (string), and the affected host version
+- until upstream ships a fix, treat any operation that may rewrite `service-env/*.env` (host updates, plugin updates, `doctor --fix` involving secrets) as a channel-auth outage risk and re-verify channel auth immediately after
 
 Workflow addendum:
 - when post-update channel health shows auth failure, **inspect the env file's raw bytes for quote corruption before assuming the upstream credential was rotated**. The wrong diagnosis path leads to credential rotation and operator confusion; the right diagnosis takes 30 seconds.
 
-## 24. Non-interactive SSH hides the OpenClaw binary on macOS
+## 24. Non-interactive SSH hides the OpenClaw binary
 
 Symptom:
 - `ssh host 'openclaw --version'` returns `command not found`
-- the same host has a working LaunchAgent and `openclaw status` works in an interactive shell
-- `launchctl print` may also look wrong if the operator guesses an old service label
+- the same host has a working managed service and `openclaw status` works in an interactive shell
+- service-manager status may also look wrong if the operator guesses an old service label
 
 What to inspect:
 - `echo "$PATH"` inside the non-interactive SSH command
-- common binary locations: `/opt/homebrew/bin/openclaw`, `~/.local/bin/openclaw`
-- the actual LaunchAgent label under `~/Library/LaunchAgents`
-- the gateway command and port inside the plist or `openclaw status --deep`
+- common binary locations for the host's package manager and `~/.local/bin/openclaw`
+- the actual service label or name
+- the gateway command and port inside the service definition or `openclaw status --deep`
 
 Observed example:
 - non-interactive SSH inherited only `/usr/bin:/bin:/usr/sbin:/sbin`
-- OpenClaw was installed under `/opt/homebrew/bin`
-- the gateway LaunchAgent label was `ai.openclaw.gateway`, not an older guessed label
-- the live gateway port was `18789`, so probing an old hard-coded health port falsely reported an outage
+- OpenClaw was installed under a package-manager prefix
+- the gateway service label was not the older guessed label
+- the live gateway port differed from an old hard-coded health port, so probing the old port falsely reported an outage
 
 Why it matters:
 - a stripped SSH `PATH` can look like a missing installation
 - an old label or hard-coded port can make a healthy gateway look stopped
 - always establish the command path, label, and port before running update or repair commands
 
-## 25. Update stop phase may need launchd bootout even after clean gateway SIGTERM
+## 25. Update stop phase may need service-manager fallback even after clean gateway SIGTERM
 
 Symptom:
-- `openclaw update --channel <channel>` prints that `launchctl stop` did not fully stop the service
-- updater reports it used a `bootout` fallback and left the service unloaded before continuing
+- `openclaw update --channel <channel>` prints that the normal service stop did not fully stop the service
+- updater reports it used a stronger stop/unload fallback and left the service unloaded before continuing
 - gateway logs may show a clean `SIGTERM` shutdown, followed by a short-lived restart that is immediately terminated before the package swap completes
 
 What to inspect:
 - update command stdout/stderr
-- `launchctl print gui/$(id -u)/ai.openclaw.gateway` before and after the update
+- the host service-manager status command before and after the update
 - recent gateway logs around the stop/restart window
-- final `openclaw status --deep`, `/health`, and LaunchAgent PID
+- final `openclaw status --deep`, `/health`, and managed-service PID
 
 Why it matters:
 - this is a lifecycle hiccup, not necessarily an update failure
-- do not rerun the update just because `launchctl stop` needed fallback; first verify the final LaunchAgent is loaded/running and the gateway responds on its configured port
-- include the stop/fallback lines in maintainer reports, because they show launchd semantics the updater had to recover from
+- do not rerun the update just because the normal stop needed fallback; first verify the final service is loaded/running and the gateway responds on its configured port
+- include the stop/fallback lines in handoff notes, because they show service-manager semantics the updater had to recover from
 
 ## 26. Selected update channel has no matching external plugin release
 
@@ -552,7 +552,7 @@ Symptom:
 - post-update `plugins doctor` can still be clean, but the host is now running a mixed channel cohort
 
 Observed example:
-- host updated from `2026.5.7` to `2026.5.10-beta.3`
+- host updated to a selected channel build
 - one third-party plugin had no `@beta` release and fell back to `@latest`
 - a globally installed official channel plugin did update to the matching beta version
 - plugin peer dependency links were repaired during the update
@@ -565,25 +565,25 @@ What to inspect:
 Why it matters:
 - "host on beta" does not imply every external plugin is on beta
 - a clean `plugins doctor` proves loadability, not cohort consistency
-- maintainer-facing reports should separate OpenClaw-bundled plugin behavior from external plugin publishing gaps
+- handoff notes should separate OpenClaw-bundled plugin behavior from external plugin publishing gaps
 
 ## 27. Transient post-restart scope and pricing warnings can coexist with healthy channels
 
 Symptom:
 - immediately after restart, gateway logs show websocket responses like `missing scope: operator.read`
-- `status --deep` reports `Model pricing` degraded because an external pricing fetch failed
+- `status --deep` reports a noncritical external catalog or pricing fetch degraded
 - channels remain connected and `/health` reports live
 
 What to inspect:
 - whether the scope errors are confined to the seconds after restart
 - whether later `channels status --deep` is connected
 - whether `/health` returns `{"ok":true,"status":"live"}`
-- whether the pricing warning is tied to a third-party pricing fetch rather than local gateway startup
+- whether the warning is tied to a third-party catalog/pricing fetch rather than local gateway startup
 
 Why it matters:
 - these warnings are useful to report, but they should not be conflated with a failed package update
 - stale Control UI/websocket clients can race the new gateway during restart
-- external pricing fetch failures may degrade status without affecting channel delivery or plugin loading
+- external catalog/pricing fetch failures may degrade status without affecting channel delivery or plugin loading
 
 ## 28. Codex OAuth model migration succeeds in config but fails at runtime
 
@@ -640,13 +640,13 @@ What to inspect:
 Useful snapshot:
 ```
 node -e 'const fs=require("fs"); const p=process.env.HOME+"/.openclaw/npm/node_modules/@openclaw/codex/package.json"; console.log(JSON.stringify(JSON.parse(fs.readFileSync(p,"utf8")), null, 2))'
-find /opt/homebrew/lib/node_modules/openclaw/dist/plugin-sdk -maxdepth 2 -type f | grep -E "root-alias|codex-native"
+find <global-openclaw>/dist/plugin-sdk -maxdepth 2 -type f | grep -E "root-alias|codex-native"
 ```
 
 Why it matters:
 - this is likely an OpenClaw package/import-path bug, not local credential drift
 - reverting only the model id may hide the package bug by moving traffic back to an older provider path
-- maintainer reports should include the exact package version and sanitized file layout
+- handoff notes should include the exact package version and sanitized file layout
 
 ## 30. OpenAI-compatible tool schema rejects arrays missing `items`
 
@@ -667,7 +667,7 @@ Why it matters:
 - fallback success can make the agent appear healthy while all GPT/OpenAI primary runs are actually rejected before completion
 - the local workaround is usually to remove/fix the bad tool from the agent toolset or fall back to another provider, but the upstream fix should validate/sanitize schemas before dispatch
 
-Maintainer report guidance:
+Handoff guidance:
 - sanitize the tool name if it reveals private app naming, but keep the field path and JSON Schema error text
 - state whether the same agent run succeeded only through fallback
 - include the OpenClaw version and provider/model that rejected the schema
@@ -683,12 +683,12 @@ What to inspect:
 - `openclaw --version` from a fresh shell
 - `which openclaw`
 - `openclaw gateway status --deep` or `openclaw status --deep`
-- LaunchAgent command path and live gateway version
+- managed-service command path and live gateway version
 
 Why it matters:
 - this may be harmless if the gateway is actually running the new version, but it is confusing in beta validation
 - it can mask real CLI/global-install/service path mismatches
-- capture the warning for maintainers but verify service reality before rerunning the update
+- capture the warning for the next operator or support contact, but verify service reality before rerunning the update
 
 ## 32. `cron run --expect-final` proves enqueue but not final completion
 
@@ -706,5 +706,5 @@ What to inspect:
 
 Why it matters:
 - cron verification after an update can be falsely marked complete when only enqueue was proven
-- for upgrade reports, distinguish "manual run enqueued" from "manual run completed successfully"
+- for handoff notes, distinguish "manual run enqueued" from "manual run completed successfully"
 - pair manual cron runs with a delayed status/history poll before declaring cron healthy

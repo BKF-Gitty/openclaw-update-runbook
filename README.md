@@ -4,7 +4,7 @@ An operator-focused skill and reference pack for updating OpenClaw, debugging po
 
 This is designed for people using Codex or Claude-style agent workflows to maintain OpenClaw hosts. It turns the update/debug process into a repeatable audit instead of a guessy rescue mission.
 
-Important: GitHub is only the distribution point. To use this as a real skill, install or copy the whole folder locally so `SKILL.md` and `references/failure-patterns.md` stay together. The skill expects those files to exist side by side on disk.
+Important: the repository is only the distribution point. To use this as a real skill, install or copy the whole folder locally so `SKILL.md` and `references/failure-patterns.md` stay together. The skill expects those files to exist side by side on disk.
 
 ## What it includes
 
@@ -15,7 +15,7 @@ Important: GitHub is only the distribution point. To use this as a real skill, i
 ## What it helps with
 
 - confirming the real service state after an update
-- separating LaunchAgent issues from detached-process issues
+- separating service-manager issues from detached-process issues
 - spotting bundled-vs-global plugin drift
 - finding stale config that survives upgrades
 - checking whether plugin install records match disk reality

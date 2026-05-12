@@ -1,17 +1,17 @@
 ---
 name: openclaw-update-runbook
-description: Use when updating OpenClaw or debugging an OpenClaw instance after an update. This skill acts as a structured update runbook with emphasis on gateway startup, launchd state, plugin registry and install drift, bundled-vs-npm/clawhub plugin confusion, stale config carried across upgrades, channel health, task ledger corruption, and logs that explain why the updated system is slow, disconnected, or half-broken.
+description: Use when updating OpenClaw or debugging an OpenClaw instance after an update. This skill acts as a structured update runbook with emphasis on gateway startup, service-manager state, plugin registry and install drift, bundled-vs-npm/clawhub plugin confusion, stale config carried across upgrades, channel health, task ledger corruption, and logs that explain why the updated system is slow, disconnected, or half-broken.
 ---
 
 # OpenClaw Update Runbook
 
-Use this skill when an OpenClaw host was just updated, is about to be updated, or is behaving strangely after an update.
+Use this skill when an OpenClaw host was just updated, is about to be updated, or is behaving strangely after an update. It is a generic operator runbook, not a release-specific checklist.
 
 This skill is meant to be installed as a folder, not copied as a single file. It expects `references/failure-patterns.md` to exist locally beside `SKILL.md` inside the same skill bundle.
 
 The goal is not only to get it running, but to prove which layer is broken:
 
-- service lifecycle
+- service lifecycle and service-manager state
 - host package version
 - plugin/package compatibility
 - config drift
@@ -24,9 +24,9 @@ The goal is not only to get it running, but to prove which layer is broken:
 ## Quick workflow
 
 1. Establish the real starting state.
-   If you are connected over non-interactive SSH on macOS, do not assume the
+   If you are connected over non-interactive SSH, do not assume the
    login-shell `PATH` is available. First locate the binary with common install
-   paths such as `/opt/homebrew/bin/openclaw` and `~/.local/bin/openclaw`, then
+   paths such as a package-manager prefix and `~/.local/bin/openclaw`, then
    export the correct `PATH` for the audit session.
 
    Check:
@@ -39,18 +39,18 @@ The goal is not only to get it running, but to prove which layer is broken:
    - recent successful sessions for the primary model and runtime, not just the display model name
 
 2. Verify the gateway is actually managed correctly.
-   Look at launchd state, running PID, and `/health`.
-   Derive the LaunchAgent label and gateway port from `openclaw status --deep`
-   and/or the plist instead of guessing them.
+   Look at service-manager state, running PID, and `/health`.
+   Derive the service label/name and gateway port from `openclaw status --deep`
+   and/or the service definition instead of guessing them.
    Do not trust only one of:
-   - `launchctl`
+   - the host's service manager
    - process list
    - health endpoint
 
    It is common to have:
-   - a plist present but not loaded
+   - a service definition present but not loaded
    - a detached gateway process still serving traffic
-   - launchd and the live process disagreeing
+   - the service manager and the live process disagreeing
 
 3. Separate bundled plugins from globally installed plugins.
    First inspect plugin health:
@@ -99,7 +99,7 @@ The goal is not only to get it running, but to prove which layer is broken:
    - plugin load failures
    - config validation
    - provider fallback attempts and primary-route auth or module failures
-   - update lifecycle messages such as `launchctl stop` fallback to `bootout`,
+   - update lifecycle messages such as service stop fallbacks,
      config overwrites/backups, and service reload timing
    - channel auth (if a channel returns 401/auth-failure post-update, inspect `~/.openclaw/service-env/*.env` for token-line quote corruption — see Pattern #23 — before assuming the upstream credential was rotated)
    - context-engine fallback
@@ -136,7 +136,7 @@ The goal is not only to get it running, but to prove which layer is broken:
    - manual `cron run` behavior
    - whether `--expect-final` actually waits for final completion on the current build
 
-   If cron verification only proves enqueue, state that clearly in the maintainer report.
+   If cron verification only proves enqueue, state that clearly in the handoff notes.
 
 10. Re-run the narrowest fix, then verify again.
    Common fix sequence:
@@ -151,7 +151,7 @@ The goal is not only to get it running, but to prove which layer is broken:
 
 Use this order when diagnosing post-update failures:
 
-- Service state: launchd, PID, `/health`
+- Service state: service manager, PID, `/health`
 - Host version: `openclaw --version`
 - Plugin mismatch: `openclaw plugins doctor`
 - Config drift: `openclaw doctor`
@@ -183,7 +183,7 @@ There are three common cases:
 - Bundled plugin exists, but a globally installed npm plugin shadows it and is on the wrong version.
 - Plugin is not bundled, so the fix is to inspect npm or ClawHub and reconcile install records.
 
-Discord is a good example of the second case: a host can upgrade correctly while still loading an older globally installed `@openclaw/discord` plugin.
+A channel plugin is a good example of the second case: a host can upgrade correctly while still loading an older globally installed plugin package.
 
 If the feature is not bundled, check npm and ClawHub before rewriting config.
 
@@ -206,9 +206,9 @@ Do not stop at "service is up." A good finish means:
 - plugin doctor is clean or explained
 - task audit is not carrying a fresh blocking error
 
-## Maintainer notes
+## Handoff notes
 
-If the upgrade exposed an OpenClaw bug rather than local drift, collect:
+If the upgrade exposed an OpenClaw bug rather than local drift, collect enough information for the next operator or project/support contact. Do not assume the user has any particular external account or wants a public report created.
 
 - exact version before and after
 - relevant config keys
@@ -219,11 +219,11 @@ If the upgrade exposed an OpenClaw bug rather than local drift, collect:
 - whether the plugin was bundled or globally installed
 - exact update command and selected channel
 - whether external plugins used channel-specific versions or fallbacks
-- service stop/restart messages, especially if `launchctl stop` needed `bootout`
+- service stop/restart messages, especially if the service manager needed a fallback stop/unload path
 - `doctor`/`plugins doctor` warning text
 - the specific log lines around startup failure or restart
 
-Sanitize reports before sharing externally:
+Sanitize handoff notes before sharing externally:
 - remove hostnames, usernames, IPs, machine names, tokens, account ids, channel ids, and personal job names
 - replace local paths with placeholders such as `<state>`, `<global-openclaw>`, and `~/.openclaw`
 - summarize private prompt/session contents instead of quoting them
@@ -241,7 +241,7 @@ When another operator or agent learns something new from a different OpenClaw ho
 - add new regression patterns to `references/failure-patterns.md`
 - only tighten the main workflow in this file if the new lesson changes the recommended audit order for most hosts
 
-If a new issue is host-specific or uncertain, add it as a new failure pattern with:
+If a new finding is host-specific or uncertain, add it as a new failure pattern with:
 
 - symptom
 - what to inspect
