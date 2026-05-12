@@ -584,3 +584,127 @@ Why it matters:
 - these warnings are useful to report, but they should not be conflated with a failed package update
 - stale Control UI/websocket clients can race the new gateway during restart
 - external pricing fetch failures may degrade status without affecting channel delivery or plugin loading
+
+## 28. Codex OAuth model migration succeeds in config but fails at runtime
+
+Symptom:
+- an OAuth-only OpenAI/Codex host has working `openai-codex/gpt-*` refs before upgrade
+- `doctor` or `update` rewrites agent and cron refs to `openai/gpt-*`
+- session/status tables may show the display model as `gpt-5.5` and the runtime as `OpenAI Codex`
+- a direct agent run returns `status: ok`, but metadata shows the OpenAI/Codex primary route failed and a fallback provider won
+
+What to inspect:
+- `agents.defaults.model.primary`
+- `agents.defaults.models` and every `agents.list[*].models` entry for `agentRuntime.id`
+- cron payload models in `~/.openclaw/cron/jobs.json`
+- direct smoke test metadata: provider, model, runtime/harness, and `fallbackAttempts`
+- recent gateway logs around `agent model:` and provider fallback decisions
+
+Typical failures:
+- direct `openai/gpt-*` route fails with direct OpenAI API-key auth on an OAuth-only host
+- migrated `openai/gpt-*` route selects a new `codex` runtime but fails before model execution
+- restored `openai-codex/gpt-*` route reaches the old provider but fails on request-shaping or tool-schema validation
+
+Why it matters:
+- `status: ok` is not proof that the intended OpenAI/Codex route works; fallbacks can mask the primary-route regression
+- cron jobs can be silently migrated independently of agent defaults and then fail later when they fire
+- do not claim a model-routing fix is verified until a fresh direct run completes on the intended provider/runtime with no unexpected fallback
+
+Verification command shape:
+```
+openclaw agent --agent main --session-id <fresh-id> --message "Reply exactly: SMOKE_OK" --timeout 120 --json
+```
+
+The result is healthy only if:
+- the payload text is correct
+- the final provider/model match the intended primary route
+- runtime/harness matches the intended path
+- `fallbackAttempts` is empty or contains only known benign retries
+
+## 29. `@openclaw/codex` package import resolves `root-alias.cjs` as a directory
+
+Symptom:
+- update installs or enables `@openclaw/codex`
+- model entries route `openai/gpt-*` through `agentRuntime.id: "codex"`
+- direct agent smoke falls back with:
+  `Cannot find module '<global-openclaw>/dist/plugin-sdk/root-alias.cjs/codex-native-task-runtime'`
+- on disk, `root-alias.cjs` is a file and `codex-native-task-runtime.js` is its sibling
+
+What to inspect:
+- `~/.openclaw/npm/node_modules/@openclaw/codex/package.json`
+- `~/.openclaw/npm/node_modules/@openclaw/codex/dist/run-attempt-*.js`
+- `<global-openclaw>/dist/plugin-sdk/root-alias.cjs`
+- `<global-openclaw>/dist/plugin-sdk/codex-native-task-runtime.js`
+- whether `plugins.entries.codex` exists or whether `codex` is activated as a special runtime plugin outside normal plugin entries
+
+Useful snapshot:
+```
+node -e 'const fs=require("fs"); const p=process.env.HOME+"/.openclaw/npm/node_modules/@openclaw/codex/package.json"; console.log(JSON.stringify(JSON.parse(fs.readFileSync(p,"utf8")), null, 2))'
+find /opt/homebrew/lib/node_modules/openclaw/dist/plugin-sdk -maxdepth 2 -type f | grep -E "root-alias|codex-native"
+```
+
+Why it matters:
+- this is likely an OpenClaw package/import-path bug, not local credential drift
+- reverting only the model id may hide the package bug by moving traffic back to an older provider path
+- maintainer reports should include the exact package version and sanitized file layout
+
+## 30. OpenAI-compatible tool schema rejects arrays missing `items`
+
+Symptom:
+- the OpenAI/Codex route reaches request validation, then fails with a 400 schema error
+- fallback succeeds on a provider with looser or different tool-schema validation
+- error text resembles:
+  `Invalid schema for function '<tool>': In context=('properties', '<array_field>'), array schema missing items.`
+
+What to inspect:
+- the failing tool name and plugin owner
+- the generated tool schema passed to OpenAI/Codex
+- plugin schema source if the tool belongs to a plugin
+- request-shaping code that converts tool definitions between provider schema formats
+
+Why it matters:
+- this blocks the primary route even when credentials and runtime selection are correct
+- fallback success can make the agent appear healthy while all GPT/OpenAI primary runs are actually rejected before completion
+- the local workaround is usually to remove/fix the bad tool from the agent toolset or fall back to another provider, but the upstream fix should validate/sanitize schemas before dispatch
+
+Maintainer report guidance:
+- sanitize the tool name if it reveals private app naming, but keep the field path and JSON Schema error text
+- state whether the same agent run succeeded only through fallback
+- include the OpenClaw version and provider/model that rejected the schema
+
+## 31. Updater restart step runs under the previous CLI after package swap
+
+Symptom:
+- `openclaw update --channel beta` reports a successful package swap from version X to version Y
+- during restart it warns that config was written by version Y, but the current command is running version X
+- updater then says the gateway already reports version Y and skips a redundant restart
+
+What to inspect:
+- `openclaw --version` from a fresh shell
+- `which openclaw`
+- `openclaw gateway status --deep` or `openclaw status --deep`
+- LaunchAgent command path and live gateway version
+
+Why it matters:
+- this may be harmless if the gateway is actually running the new version, but it is confusing in beta validation
+- it can mask real CLI/global-install/service path mismatches
+- capture the warning for maintainers but verify service reality before rerunning the update
+
+## 32. `cron run --expect-final` proves enqueue but not final completion
+
+Symptom:
+- `openclaw cron run <id> --expect-final --timeout <ms>` returns quickly with an enqueue-style JSON payload
+- no final agent result is included even though help says the flag waits for the final response
+- `openclaw cron runs` may require `--id`, which makes broad post-update polling less discoverable
+
+What to inspect:
+- exact CLI version
+- `openclaw cron run --help`
+- `openclaw cron runs --help`
+- run history for the specific job id
+- job status after a delay
+
+Why it matters:
+- cron verification after an update can be falsely marked complete when only enqueue was proven
+- for upgrade reports, distinguish "manual run enqueued" from "manual run completed successfully"
+- pair manual cron runs with a delayed status/history poll before declaring cron healthy

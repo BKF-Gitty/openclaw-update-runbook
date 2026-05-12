@@ -15,6 +15,7 @@ The goal is not only to get it running, but to prove which layer is broken:
 - host package version
 - plugin/package compatibility
 - config drift
+- model/provider runtime routing
 - channel health
 - task ledger health
 - runtime performance
@@ -34,6 +35,8 @@ The goal is not only to get it running, but to prove which layer is broken:
    - `openclaw doctor --non-interactive --no-workspace-suggestions`
    - `openclaw channels status --deep`
    - `openclaw tasks audit`
+   - current model routing: agent defaults, agent-level model maps, fallback chains, and cron payload models
+   - recent successful sessions for the primary model and runtime, not just the display model name
 
 2. Verify the gateway is actually managed correctly.
    Look at launchd state, running PID, and `/health`.
@@ -65,6 +68,8 @@ The goal is not only to get it running, but to prove which layer is broken:
    - `plugins.allow`
    - `plugins.entries.*`
    - model aliases and fallback chains
+   - runtime mappings for `openai/*`, `openai-codex/*`, `codex`, and `pi`
+   - cron job payload model refs, which can be normalized separately from agent defaults
    - update channel metadata
 
    If doctor says a provider or plugin is unknown, inspect the actual config file and do not assume `doctor --fix` fully cleaned it.
@@ -93,6 +98,7 @@ The goal is not only to get it running, but to prove which layer is broken:
    Prioritize recent startup lines and warnings involving:
    - plugin load failures
    - config validation
+   - provider fallback attempts and primary-route auth or module failures
    - update lifecycle messages such as `launchctl stop` fallback to `bootout`,
      config overwrites/backups, and service reload timing
    - channel auth (if a channel returns 401/auth-failure post-update, inspect `~/.openclaw/service-env/*.env` for token-line quote corruption — see Pattern #23 — before assuming the upstream credential was rotated)
@@ -112,7 +118,27 @@ The goal is not only to get it running, but to prove which layer is broken:
 
    A successful package update can still leave the system unhealthy if stale tasks block restarts or keep the audit red.
 
-8. Re-run the narrowest fix, then verify again.
+8. Prove the primary model route, not just overall agent success.
+   Run a narrow direct agent smoke test with a fresh session id and inspect the returned metadata:
+   - final provider and model
+   - runtime or harness id
+   - `fallbackAttempts`
+   - provider auth errors
+   - module load errors
+   - schema validation errors
+
+   Treat `status: ok` as insufficient if the primary model failed and a fallback provider completed the run.
+
+9. Test at least one representative cron path.
+   Check:
+   - cron payload model counts
+   - named or high-value cron job status
+   - manual `cron run` behavior
+   - whether `--expect-final` actually waits for final completion on the current build
+
+   If cron verification only proves enqueue, state that clearly in the maintainer report.
+
+10. Re-run the narrowest fix, then verify again.
    Common fix sequence:
    - stop gateway cleanly
    - update host package
@@ -131,6 +157,7 @@ Use this order when diagnosing post-update failures:
 - Config drift: `openclaw doctor`
 - Channel reality: `openclaw channels status --deep`
 - Task ledger: `openclaw tasks audit`
+- Model/runtime route reality: direct smoke metadata and fallback attempts
 - Runtime symptoms: gateway logs
 
 ## When to open references
@@ -174,6 +201,8 @@ Do not stop at "service is up." A good finish means:
 - the right version is installed
 - the gateway is managed correctly
 - channels are connected
+- the intended primary model route succeeds without an unexpected fallback
+- cron payload models and representative cron jobs are healthy
 - plugin doctor is clean or explained
 - task audit is not carrying a fresh blocking error
 
@@ -183,13 +212,22 @@ If the upgrade exposed an OpenClaw bug rather than local drift, collect:
 
 - exact version before and after
 - relevant config keys
+- primary model route before and after, including runtime id
+- direct smoke result metadata, especially `fallbackAttempts`
 - plugin source path actually loaded
+- installed package version and file layout for any failing npm plugin
 - whether the plugin was bundled or globally installed
 - exact update command and selected channel
 - whether external plugins used channel-specific versions or fallbacks
 - service stop/restart messages, especially if `launchctl stop` needed `bootout`
 - `doctor`/`plugins doctor` warning text
 - the specific log lines around startup failure or restart
+
+Sanitize reports before sharing externally:
+- remove hostnames, usernames, IPs, machine names, tokens, account ids, channel ids, and personal job names
+- replace local paths with placeholders such as `<state>`, `<global-openclaw>`, and `~/.openclaw`
+- summarize private prompt/session contents instead of quoting them
+- keep exact version numbers, package names, model ids, runtime ids, and error classes when they are needed to reproduce the bug
 
 For concrete regression patterns and example symptoms, read [references/failure-patterns.md](references/failure-patterns.md).
 
