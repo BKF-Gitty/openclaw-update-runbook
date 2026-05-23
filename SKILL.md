@@ -28,6 +28,12 @@ The goal is not only to get it running, but to prove which layer is broken:
 ## Quick workflow
 
 1. Establish the real starting state.
+   For remote multi-host updates, first prove SSH reachability to each host
+   with a short timeout. If a host cannot be reached directly or through an
+   available jump host, record it as a transport/access blocker instead of an
+   OpenClaw update failure, because no OpenClaw command has executed on that
+   host yet.
+
    If you are connected over non-interactive SSH, do not assume the
    login-shell `PATH` is available. First locate the binary with common install
    paths such as a package-manager prefix and `~/.local/bin/openclaw`, then

@@ -717,3 +717,32 @@ Why it matters:
 - cron verification after an update can be falsely marked complete when only enqueue was proven
 - for handoff notes, distinguish "manual run enqueued" from "manual run completed successfully"
 - pair manual cron runs with a delayed status/history poll before declaring cron healthy
+
+## 33. Discord offline because the managed gateway service is installed but unloaded
+
+Symptom:
+- Discord shows the bot offline, and local channel status can only report config because the gateway is unreachable
+- `openclaw doctor` reports `Gateway not running` and a managed service such as a LaunchAgent installed but not loaded
+- `openclaw update status` may still work from SSH because it does not require the live gateway
+
+Observed recovery:
+- From an outside SSH shell, export the real package-manager path first
+- Run the requested stable update explicitly, for example `openclaw update --channel stable --yes --timeout 1800`
+- Re-run `openclaw status --deep` and `openclaw channels status --deep`
+- A healthy recovery shows the service loaded/running, gateway reachable, the selected channel persisted, and Discord `running, connected`
+
+What to inspect:
+- `command -v openclaw` and `openclaw --version`
+- `openclaw update status`
+- `openclaw doctor --non-interactive --no-workspace-suggestions`
+- `openclaw status --deep`
+- `openclaw channels status --deep`
+
+Why it matters:
+- a channel outage can be a service-manager state problem rather than a Discord plugin problem
+- updating from outside the OpenClaw-managed agent path can recover an unloaded gateway and move the host back to the intended stable channel in one pass
+- record pre-update warnings separately from the package update result, especially plaintext-secret warnings, stale session metadata, and old task-ledger warnings
+
+Remote access guardrail:
+- If another host cannot be reached over SSH with a short timeout, including from an available jump host, classify it as a transport/access blocker
+- Do not file an OpenClaw issue for an unreachable host unless you have logs or command output proving OpenClaw failed on that host
