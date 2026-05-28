@@ -1,7 +1,7 @@
 ---
 name: openclaw-update-runbook
 description: Use when updating OpenClaw or debugging an OpenClaw instance after an update. This skill acts as a structured update runbook with emphasis on gateway startup, service-manager state, plugin registry and install drift, bundled-vs-npm/clawhub plugin confusion, stale config carried across upgrades, channel health, task ledger corruption, and logs that explain why the updated system is slow, disconnected, or half-broken.
-version: 1.0.2
+version: 1.0.6
 metadata:
   openclaw:
     emoji: "🦞"
@@ -22,8 +22,11 @@ The goal is not only to get it running, but to prove which layer is broken:
 - model/provider runtime routing
 - channel health
 - task ledger health
+- cron/session isolation and channel-lane ownership
 - runtime performance
 - command-path and update-channel assumptions
+- self-update hazards when an agent updates the gateway that is running it
+- supply-chain and package-integrity spot checks after plugin/npm churn
 
 ## Quick workflow
 
@@ -39,8 +42,17 @@ The goal is not only to get it running, but to prove which layer is broken:
    paths such as a package-manager prefix and `~/.local/bin/openclaw`, then
    export the correct `PATH` for the audit session.
 
+   If the gateway process is owned by a different OS user than the SSH login
+   user, run OpenClaw diagnostics as the gateway service user. The SSH user can
+   have no `openclaw` on PATH, or a private package-manager shim can be
+   unreadable, while the LaunchAgent/systemd service is healthy under another
+   home directory. Derive the service user, state dir, CLI path, and port from
+   the live process/service definition before running `doctor` or editing
+   config.
+
    Check:
    - `openclaw --version`
+   - `openclaw update status`
    - `openclaw status --deep`
    - `openclaw doctor --non-interactive --no-workspace-suggestions`
    - `openclaw channels status --deep`
@@ -74,6 +86,10 @@ The goal is not only to get it running, but to prove which layer is broken:
    - For special runtime plugins such as `codex`, compare `plugins inspect <id>`
      with `plugins list --json`; inspect can report a runtime as loaded while
      raw plugin metadata still says disabled.
+   - For ClawHub/runtime plugins such as `codex`, compare the plugin version
+     against the host version even when `plugins doctor` is clean. Use
+     `openclaw plugins update <id> --dry-run` to see whether an official
+     matching package exists before changing broader model config.
 
 4. Check for config carried across the upgrade that no longer validates.
    Pay attention to:
@@ -96,6 +112,11 @@ The goal is not only to get it running, but to prove which layer is broken:
    Look for:
    - recorded install paths that do not exist
    - recorded versions drifting from installed versions
+   - ClawHub-installed runtime plugins under `~/.openclaw/extensions/<id>` that
+     load successfully but lag the host cohort
+   - npm install records where `resolvedSpec`, integrity, and installed version
+     are exact, but the stored `spec` is still a bare package name such as
+     `@openclaw/discord`
    - package specs rewritten or preserved during `openclaw update --channel ...`
    - external plugins that lack a release for the selected channel and were
      installed from a fallback tag such as `@latest`
@@ -128,6 +149,8 @@ The goal is not only to get it running, but to prove which layer is broken:
    - lost tasks
    - delivery failures
    - timestamp inconsistencies
+   - cron jobs whose persisted `sessionKey` points at a live channel lane
+     such as `agent:<agent>:discord:direct:*` despite `sessionTarget: isolated`
 
    A successful package update can still leave the system unhealthy if stale tasks block restarts or keep the audit red.
 
@@ -144,16 +167,50 @@ The goal is not only to get it running, but to prove which layer is broken:
    Treat a clean `plugins doctor` as insufficient for runtime plugins until a
    fresh direct agent run proves that the intended harness can load and execute.
 
-9. Test at least one representative cron path.
+9. If the update was initiated from inside OpenClaw, audit it as a special risk.
+   An OpenClaw agent can sometimes update the package it is running under, but
+   that path has repeatedly left hosts with the package changed and the managed
+   service unloaded or not restarted. From an outside SSH shell, verify:
+   - whether the requested version actually installed
+   - whether the managed service is loaded/running after the update
+   - whether the gateway `/health` endpoint and channels recovered
+   - whether a fresh `openclaw gateway restart` repairs an installed-but-unloaded
+     service without any further package changes
+
+   Do not treat the agent conversation's final message as authoritative. Trust
+   the post-update host state.
+
+10. Test at least one representative cron path.
    Check:
    - cron payload model counts
+   - model counts by `agentId` so temporary provider workarounds can be
+     rolled back without flattening full-size and mini cron routes together
+   - persisted `sessionKey` values, especially channel/direct-message keys on
+     isolated cron jobs
    - named or high-value cron job status
    - manual `cron run` behavior
    - whether `--expect-final` actually waits for final completion on the current build
+   - recent run history for the specific job id, not only current job state,
+     so stale last-run errors are separated from active regressions
 
    If cron verification only proves enqueue, state that clearly in the handoff notes.
 
-10. Re-run the narrowest fix, then verify again.
+11. Run a targeted npm/plugin supply-chain spot check when plugin installs changed.
+   This is especially important after a failed plugin install, external plugin
+   fallback, or public npm compromise advisory. Check:
+   - whether `openclaw security audit --deep` flags unpinned npm plugin specs
+     after plugin update churn
+   - exact installed package versions against the advisory list
+   - plugin install roots such as `~/.openclaw/npm/node_modules`
+   - global OpenClaw/npm roots such as `/opt/homebrew/lib/node_modules`
+   - obvious malicious lifecycle hooks in `package.json`
+   - persistence artifacts named by the advisory
+   - lockfiles and config files for strong IoCs
+
+   State the limits of the check: a live-system scan cannot prove a package was
+   never installed and removed earlier.
+
+12. Re-run the narrowest fix, then verify again.
    Common fix sequence:
    - stop gateway cleanly
    - update host package
@@ -229,9 +286,16 @@ If the upgrade exposed an OpenClaw bug rather than local drift, collect enough i
 - relevant config keys
 - primary model route before and after, including runtime id
 - direct smoke result metadata, especially `fallbackAttempts`
+- cron model map before and after any temporary workaround, including mini
+  routes and inherited/default model cases
+- exact first bad cron run timestamps from `openclaw cron runs --id <id>`,
+  not just the time the operator noticed the issue
+- any cron `sessionKey` values that crossed channel/session boundaries, after
+  replacing channel ids and account ids with placeholders
 - plugin source path actually loaded
 - installed package version and file layout for any failing npm plugin
 - whether the plugin was bundled or globally installed
+- gateway OS service user and command path when they differ from the SSH user
 - exact update command and selected channel
 - whether external plugins used channel-specific versions or fallbacks
 - service stop/restart messages, especially if the service manager needed a fallback stop/unload path

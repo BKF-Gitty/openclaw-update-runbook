@@ -746,3 +746,328 @@ Why it matters:
 Remote access guardrail:
 - If another host cannot be reached over SSH with a short timeout, including from an available jump host, classify it as a transport/access blocker
 - Do not file an OpenClaw issue for an unreachable host unless you have logs or command output proving OpenClaw failed on that host
+
+## 34. In-gateway self-update can leave the package changed but the service unloaded
+
+Symptom:
+- the user asks OpenClaw itself to update the running OpenClaw host
+- the agent conversation reports an update attempt or partial success
+- later SSH shows one of:
+  - CLI package reached the requested stable/tag, but the managed LaunchAgent/service is installed and not loaded
+  - host remained on the previous beta/stable even though the agent said it attempted the update
+  - channels are offline because the gateway is not actually running
+
+What to inspect:
+- `openclaw --version`
+- `openclaw update status`
+- `openclaw gateway status --deep`
+- `openclaw status --deep`
+- `openclaw channels status --deep`
+- service-manager state from the real service label, not a guessed label
+- recent gateway logs around the update/restart window
+
+Recovery:
+- switch to an outside shell/SSH session
+- run the explicit target update from there, for example:
+  ```
+  openclaw update --channel stable --yes --timeout 1800
+  ```
+  or, when the exact tag matters:
+  ```
+  openclaw update --tag <version> --yes --timeout 1800
+  ```
+- if the package is already at the target version but the service is unloaded, try:
+  ```
+  openclaw gateway restart
+  ```
+- then verify service loaded/running, `/health`, channels, plugin doctor, and tasks audit
+
+Why it matters:
+- this is different from a failed npm package install; the dangerous part is that the process supervising the agent is also the process being stopped/replaced
+- a successful package swap is not enough if the service manager never reloads the gateway
+- do not trust the agent's final chat response as proof of update success; trust the host state inspected from outside the managed gateway
+
+## 35. Stable package installed while update channel still points at beta
+
+Symptom:
+- operator explicitly updates to the latest stable
+- `openclaw --version` and gateway version show the stable build
+- `openclaw update status` still offers a newer beta build or reports beta channel metadata
+- the host may have been on a beta channel in previous sessions
+
+What to inspect:
+- `openclaw --version`
+- `openclaw update status`
+- `openclaw status --deep`
+- `openclaw.json` update/channel fields
+- whether the update command used `--channel stable`, `--tag <stable-version>`, or only a bare `update`
+
+Recovery:
+- if the user's intent is stable, explicitly set or preserve the stable channel with the update command rather than assuming a stable tag rewrites every channel preference
+- after the update, record both facts in the audit:
+  - installed/runtime version
+  - configured update channel and next offered version
+- if a future run must avoid accidental beta adoption, correct the config/channel state before running another automatic update
+
+Why it matters:
+- "latest stable installed" and "host will keep following stable" are separate claims
+- leaving beta channel metadata behind can make the next operator accidentally move the machine back onto beta
+- this is especially easy to miss when the gateway itself is healthy and channels are connected
+
+## 36. Deprecated plugin runtime API warning is usually an attribution issue, not a blocker
+
+Symptom:
+- `openclaw plugins doctor` or `openclaw doctor` is otherwise clean but prints:
+  `plugin runtime config.loadConfig() is deprecated (runtime-config-load-write); use config.current().`
+- the gateway is healthy and channels are connected
+- the warning may or may not identify which plugin emitted it, depending on OpenClaw version
+
+What to inspect:
+- `openclaw plugins doctor`
+- `openclaw plugins list --json`
+- `openclaw plugins inspect <id>` for third-party plugins loaded from npm
+- recent gateway logs for the same warning with more context
+
+How to treat it:
+- do not block the update on this warning if all health checks pass
+- include it in the audit report as technical debt
+- if the warning is unattributed, note that the diagnostic itself is incomplete; later versions may improve attribution by naming the plugin/source path
+
+Why it matters:
+- repeated nonblocking warnings can hide fresh failures in long update runs
+- it is useful upstream feedback, but it should not be conflated with a broken install, disconnected channel, or failed model route
+
+## 37. Supply-chain advisory audit should combine exact version matching with IoC checks
+
+Symptom:
+- after update/plugin churn, the user asks whether npm packages are compromised
+- a public advisory lists hundreds of affected packages and specific indicators of compromise
+- top-level `npm ls` looks clean but does not cover nested plugin installs or persistence artifacts
+
+What to inspect:
+- the advisory's exact package/version table
+- global npm roots such as `/opt/homebrew/lib/node_modules` or `/usr/local/lib/node_modules`
+- OpenClaw plugin roots such as `~/.openclaw/npm/node_modules`
+- workspace-level `node_modules` if the host uses one
+- package lifecycle scripts, especially suspicious `preinstall` hooks
+- dependency specs pointing at attacker-controlled git refs
+- persistence artifacts named by the advisory
+- lockfiles and config files for strong text IoCs
+
+Observed Shai-Hulud-style IoCs to include when relevant:
+- `preinstall` running `bun run index.js` or `bun index.js`
+- dependency specs involving `@antv/setup` or `antvis/G2` git refs
+- `~/Library/LaunchAgents/com.user.kitty-monitor.plist`
+- `gh-token-monitor`-style scripts
+- AI-agent hooks or VS Code folder-open tasks that run unexpected setup files
+
+How to report:
+- separate "no exact installed compromised package/version found" from "no IoCs found"
+- state the scan limits: a live-system audit cannot prove a compromised package was never installed and removed earlier
+- do not paste secrets, host IPs, local usernames, or raw tokens into any maintainer-facing report
+
+Why it matters:
+- package compromise checks are easy to under-scope; nested plugin dependency trees are where OpenClaw updates actually changed npm state
+- IoC checks catch a different class of compromise than exact installed-version matching
+- the maintainer/user needs a clear confidence statement, not just a pile of package names
+
+## 38. Official plugin updates can leave bare npm specs even when resolution metadata is pinned
+
+Symptom:
+- after a successful host update, `openclaw security audit --deep` still reports:
+  `plugins.installs_unpinned_npm_specs Plugin index includes unpinned npm specs`
+- the affected records are official npm plugins such as `brave`, `codex`, `discord`, or `whatsapp`
+- `~/.openclaw/plugins/installs.json` shows exact `resolvedSpec`, `resolvedVersion`, integrity, and shasum values, but the stored `spec` field is still a bare package name such as `@openclaw/discord`
+
+What to inspect:
+- `openclaw security audit --deep`
+- `~/.openclaw/plugins/installs.json`
+- `openclaw plugins list --json` for each plugin's `version`, `origin`, and `source`
+- package.json for each global plugin under `~/.openclaw/npm/node_modules`
+
+Recovery:
+- rewrite each affected npm plugin install record with an exact version and `--pin`, for example:
+  ```
+  openclaw plugins install @openclaw/brave-plugin@<host-version> --force --pin
+  openclaw plugins install @openclaw/codex@<host-version> --force --pin
+  openclaw plugins install @openclaw/discord@<host-version> --force --pin
+  openclaw plugins install @openclaw/whatsapp@<host-version> --force --pin
+  openclaw gateway restart
+  ```
+- re-run `openclaw security audit --deep` and verify the unpinned-spec warning clears
+- record both `spec` and `resolvedSpec` in handoff notes when explaining what changed
+
+Why it matters:
+- `resolvedSpec` plus integrity is useful provenance, but OpenClaw's security audit intentionally treats a bare stored `spec` as future-update risk
+- an operator can falsely believe "new OpenClaw pins dependencies" if they only check the resolved metadata and miss the still-unpinned `spec`
+- the smallest safe fix is to rewrite the records through the CLI with `--pin`, not to hand-edit install metadata
+
+## 39. Healthy Discord status but direct messages do not answer because cron owns the DM session lane
+
+Symptom:
+- `openclaw status --deep` and channel health checks report Discord configured/OK
+- direct messages arrive or the channel appears connected, but the assistant does not answer
+- cron or long-running scheduled jobs are active, recently active, or recently interrupted
+
+What to inspect:
+- `openclaw tasks list --status running --json`
+- `openclaw status --deep` session table for direct-message and cron session keys
+- `openclaw cron list --json` for persisted `sessionKey` fields
+- recent gateway logs around gateway drain/restart and cron job start/finish events
+
+Bad shape:
+```
+sessionTarget: "isolated"
+sessionKey: "agent:<agent>:discord:direct:<redacted-channel-or-user-id>"
+```
+
+Healthy isolated cron shape:
+```
+sessionKey: "agent:<agent>:cron:<job-id>:run:<run-id>"
+```
+
+Recovery:
+- clear the stale `sessionKey` only from cron jobs that are supposed to use isolated sessions
+- restart the gateway if a long-running cron turn already occupied the live channel lane
+- verify no running tasks remain and send/receive on the affected channel works again
+
+Why it matters:
+- channel health can be true while the conversational lane is effectively blocked
+- stale cron state can survive upgrades and only become visible when a long job runs
+- do not rotate Discord tokens or reinstall the channel plugin until session ownership has been checked
+- this is worth upstream reporting because cron isolation should prevent channel-bound session keys from blocking live replies
+
+Handoff guidance:
+- sanitize channel ids and direct-message ids, but keep the `agent:<agent>:discord:direct:*` vs `agent:<agent>:cron:*` key shape
+- include whether the affected cron jobs had `sessionTarget: isolated`
+- include whether clearing the keys plus gateway restart restored replies
+
+## 40. Cron `turn-accepted` timeouts after provider/model route changes
+
+Symptom:
+- multiple cron jobs fail with:
+  `cron: job execution timed out (last phase: turn-accepted)`
+- logs may also show provider/harness timeout language such as a Codex/OpenAI client being retired after a timed-out turn
+- direct agent smoke can return `status: ok` if fallback succeeds, while cron jobs on the primary route still fail later
+
+What to inspect:
+- `openclaw cron list --json` model counts and per-job `payload.model`
+- counts by `agentId`, not only total model counts, because mini cron routes may be intentionally different from full-size jobs
+- `openclaw cron runs --id <job-id> --limit <n>` for first bad run, prior-good run, provider, model, runtime, and duration
+- gateway logs around provider fallback decisions and `turn-accepted` timeouts
+- default model routing for cron jobs whose payload has no explicit model override
+
+Typical investigation sequence:
+1. Capture the pre-change cron model map, including jobs with no explicit model.
+2. Move one representative failing job to a known-good provider and verify completion through run history, not just enqueue.
+3. If applying a temporary bulk provider workaround, record the exact original split so it can be restored later.
+4. When rolling back the workaround, preserve mini routes separately instead of flattening every cron job to the same model.
+
+Why it matters:
+- a provider workaround can hide the OpenClaw regression while also erasing useful model topology
+- inherited/default cron models are easy to miss because they do not appear in simple `payload.model` counts
+- stale last-run errors can remain after the route is fixed; run history tells whether the failure is still active or only historical
+- the first bad run timestamp is more useful to maintainers than the time the operator noticed alerts
+
+Handoff guidance:
+- keep exact model ids such as `openai/gpt-5.5`, `openai/gpt-5.4-mini`, `openai-codex/gpt-5.5`, and provider/runtime labels
+- sanitize private job names if needed, but keep generic categories such as "high-frequency sync", "health monitor", or "long-running nightly job"
+- include at least one prior-good and first-bad run entry with provider/model/duration/error, after removing session ids and private output text
+
+## 41. Gateway runs under a dedicated OS user with a private CLI shim
+
+Symptom:
+- SSH succeeds as one user, but `openclaw --version` returns `command not found`
+  or `permission denied`
+- process list shows a healthy gateway owned by a different OS user
+- the gateway command points at a package-manager runtime such as
+  `/usr/local/node24/bin/node .../openclaw/dist/index.js gateway --port <port>`
+- the `openclaw` wrapper or symlink is readable/executable only by the gateway
+  service user
+
+What to inspect:
+- `ps aux | grep -i '[o]penclaw'`
+- the gateway process owner, command path, and port
+- `launchctl list`, `systemctl --user`, or the service definition for the
+  managed service label
+- common package-manager paths such as `/usr/local/node24/bin/openclaw`,
+  `/opt/homebrew/bin/openclaw`, and `~/.local/bin/openclaw`
+- whether `sudo -H -u <service-user> env PATH=<package-bin>:$PATH openclaw ...`
+  reaches the same config and state dir as the gateway
+
+Recovery:
+- run diagnostics and fixes as the gateway service user, not as the SSH login
+  user
+- export the package-manager bin dir explicitly in every non-interactive command
+- derive the config path from `openclaw daemon status` / `gateway status` before
+  editing files
+
+Why it matters:
+- the login user's missing PATH is not proof OpenClaw is uninstalled
+- running `doctor --fix` as the wrong user can inspect or create the wrong
+  `~/.openclaw` tree
+- service health, config, plugins, and sessions must be audited from the same
+  user context as the managed gateway
+
+## 42. ClawHub Codex extension lags host while plugin doctor is clean
+
+Symptom:
+- host OpenClaw version is newer than the loaded `codex` plugin version
+- `openclaw plugins doctor` reports no plugin issues
+- `openclaw plugins inspect codex` shows `Origin: global` and
+  `Source: ~/.openclaw/extensions/codex/dist/index.js`
+- recent logs may contain stalled Codex embedded runs or fallback/cooldown
+  history, but a simple service health check is green
+
+What to inspect:
+- `openclaw --version`
+- `openclaw plugins inspect codex`
+- `openclaw plugins list --json`
+- `openclaw plugins update codex --dry-run`
+- recent gateway logs around `codex`, `fallback`, `stalled_agent_run`, and
+  `strict-agentic execution contract`
+
+Observed healthy recovery shape:
+- `plugins update codex --dry-run` reports a newer official ClawHub package
+  matching the host version
+- after backing up `~/.openclaw/extensions/codex`, run
+  `openclaw plugins update codex`
+- restart the managed gateway
+- `plugins inspect codex` reports the host-matching version
+- a fresh direct smoke run returns the intended payload with provider/model and
+  harness matching Codex, and no unexpected fallback
+
+Why it matters:
+- `plugins doctor` proves loadability, not cohort consistency
+- Codex is both a plugin and a model/runtime bridge; a stale but loadable
+  extension can be the real runtime mismatch
+- updating every plugin with `--all` is riskier than updating the single stale
+  runtime plugin when the rest of the host is healthy
+
+## 43. Personal Codex CLI assets are not loaded by isolated Codex homes
+
+Symptom:
+- `openclaw doctor` warns that personal Codex CLI assets exist under locations
+  such as `~/.codex` or `~/.agents/skills`
+- native Codex-mode OpenClaw agents use isolated per-agent Codex homes
+- operators expect the personal Codex config, hooks, or skills to affect the
+  native Codex app-server child, but the runtime behaves as if they are absent
+
+What to inspect:
+- the exact doctor warning text
+- `openclaw migrate codex --dry-run`
+- the target OpenClaw workspace and per-agent Codex home paths
+- direct smoke metadata for the actual provider/model/harness used by OpenClaw
+
+Important detail:
+- a dry-run can report that only `config.toml` exists and that it will be
+  archived for manual review, not activated automatically
+- OpenClaw may copy skills into the current workspace when migration is applied,
+  but Codex config, plugins, and hooks remain manual-review items
+
+Why it matters:
+- this warning is usually not the immediate fix for a host/package mismatch
+- applying the migration does not automatically make personal Codex config drive
+  the native OpenClaw Codex harness
+- separate "assets not promoted into OpenClaw" from "primary model route failed"
+  and prove the runtime with a direct smoke test before changing model config

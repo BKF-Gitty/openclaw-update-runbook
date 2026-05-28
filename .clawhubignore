@@ -2,5 +2,7 @@
 /.clawhub/
 /.clawdhub/
 openclaw-maintainer-issue-*.md
+openclaw-*-audit-*.md
+sentinel-*-audit-*.md
 *.bak
 *.tmp
